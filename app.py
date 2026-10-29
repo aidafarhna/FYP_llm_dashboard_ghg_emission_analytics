@@ -1,8 +1,3 @@
-"""
-EcoTrack Enterprise — Scope 1 & 2 GHG Emissions Analytics
-Phase 2 & 4: Dual-Mode Data Management, Bulk Upload, & Dynamic Sync
-"""
-
 import io
 import json
 import os
@@ -538,18 +533,27 @@ def render_drill_panel(slot, months: list) -> None:
 
 SUGGESTED_QUESTIONS = ["Why did emissions change in the selected year?", "Identify the top Scope 2 emission drivers.", "Compare emissions between selected plants."]
 
-def render_assistant_panel(context: str, k: dict) -> None:
+def render_assistant_panel(context: str, k: dict, df_current: pd.DataFrame) -> None:
     st.markdown(f"""<div class="assistant"><div class="assistant-head"><div class="assistant-mark">AI</div><h3>GHG Analytics Assistant</h3></div><p class="sub">Answers will be grounded in your current filters.</p></div>""", unsafe_allow_html=True)
     st.caption(f"Active context: {context}")
     if "chat" not in st.session_state: st.session_state.chat = []
         
     def generate_chat_reply(user_query):
         if not MODEL: return "Error: Gemini API is missing or not configured correctly."
+        
+        # THE FIX: Convert the active Excel data into a hidden table for the AI to read!
+        csv_data = df_current.to_csv(index=False)
+        
         context_data = (
-            f"Active Filters: {context}\nScope 1 Total: {k['scope1']:,.0f} tCO2e (YoY Change: {k.get('yoy_s1')}%)\n"
-            f"Scope 2 Total: {k['scope2']:,.0f} tCO2e (YoY Change: {k.get('yoy_s2')}%)\nCombined Total: {k['combined']:,.0f} tCO2e (YoY Change: {k.get('yoy')}%)\n"
+            f"Active Filters: {context}\n"
+            f"KPI Summary:\n"
+            f"- Scope 1 Total: {k['scope1']:,.0f} tCO2e\n"
+            f"- Scope 2 Total: {k['scope2']:,.0f} tCO2e\n"
+            f"- Combined Total: {k['combined']:,.0f} tCO2e\n\n"
+            f"Raw Database Table (CSV Format):\n{csv_data}\n"
         )
-        system_prompt = f"You are a professional Sustainability Assistant. Answer the user's question based strictly on this dashboard data:\n\n{context_data}\n\nUser Question: {user_query}\nKeep your answer brief, insightful, and formatted cleanly."
+        
+        system_prompt = f"You are a professional Sustainability Assistant. Answer the user's question based strictly on the provided dashboard data and Raw Database Table.\n\n{context_data}\n\nUser Question: {user_query}\nIf asked to calculate or compare specific plants/months, look at the Raw Database Table to do the math. Keep your answer brief, insightful, and formatted cleanly."
         try:
             return MODEL.generate_content(system_prompt).text
         except Exception as e:
@@ -664,7 +668,7 @@ def page_data_management(df: pd.DataFrame) -> None:
             with col6:
                 input_unit = st.text_input("Units (e.g. Liters, kWh)")
             with col7:
-                input_ef = st.number_input("Emission Factor", value=0.0, format="%.4f")
+                input_ef = st.number_input("Emission Factor", value=0.0, format="%.9f")
                 
             st.markdown(f"**3. Monthly Emissions ({EMISSION_UNIT})**")
             m_cols = st.columns(6)
@@ -718,8 +722,8 @@ def page_data_management(df: pd.DataFrame) -> None:
                         "Reference Year": <YYYY integer>,
                         "Source ID": <"Plant A", etc.>,
                         "Scope": <"Scope 1" or "Scope 2">,
-                        "Source Description": <Short text>,
-                        "Activity Data": <Description string, e.g. "Stationary Combustion">,
+                        "Source Description": <Short text description>,
+                        "Activity Data": <Activity category string, e.g. "Stationary Combustion", "Flaring", "Venting", "Fugitive Emission">,
                         "Units": <e.g. "liters">,
                         "Emission Factor": <Standard factor used, float>,
                         "Jan": <tCO2e float>, "Feb": <tCO2e float>, "Mar": <tCO2e float>, "Apr": <tCO2e float>, "May": <tCO2e float>, "Jun": <tCO2e float>, 
@@ -816,7 +820,7 @@ def page_analytics(df: pd.DataFrame, filters: dict) -> None:
     main_col, chat_col = st.columns([7, 3], gap="large")
 
     with chat_col:
-        render_assistant_panel(f"{year} · {scope_option} · {len(plants)} plant(s)", k)
+        render_assistant_panel(f"{year} · {scope_option} · {len(plants)} plant(s)", k, df_current)
 
     with main_col:
         drill_slot = st.empty()
