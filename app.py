@@ -26,7 +26,9 @@ st.set_page_config(
 # ---------------------------------------------------------------------------
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    MODEL = genai.GenerativeModel("gemini-3.5-flash")
+    # MODEL = genai.GenerativeModel("gemini-3.8-flash")
+    MODEL = genai.GenerativeModel("gemini-3.5-flash") 
+    
 except Exception as e:
     MODEL = None
 
@@ -533,7 +535,7 @@ def render_drill_panel(slot, months: list) -> None:
 
 SUGGESTED_QUESTIONS = ["Why did emissions change in the selected year?", "Identify the top Scope 2 emission drivers.", "Compare emissions between selected plants."]
 
-def render_assistant_panel(context: str, k: dict, df_current: pd.DataFrame) -> None:
+def render_assistant_panel(context: str, k: dict, df_chat: pd.DataFrame) -> None:
     st.markdown(f"""<div class="assistant"><div class="assistant-head"><div class="assistant-mark">AI</div><h3>GHG Analytics Assistant</h3></div><p class="sub">Answers will be grounded in your current filters.</p></div>""", unsafe_allow_html=True)
     st.caption(f"Active context: {context}")
     if "chat" not in st.session_state: st.session_state.chat = []
@@ -541,19 +543,30 @@ def render_assistant_panel(context: str, k: dict, df_current: pd.DataFrame) -> N
     def generate_chat_reply(user_query):
         if not MODEL: return "Error: Gemini API is missing or not configured correctly."
         
-        # THE FIX: Convert the active Excel data into a hidden table for the AI to read!
-        csv_data = df_current.to_csv(index=False)
+        csv_data = df_chat.to_csv(index=False)
+        
+        prev_str = f"{k['prev_total']:,.0f} tCO2e" if k.get('prev_total') else "N/A"
+        yoy_str = f"{k['yoy']:+.2f}%" if k.get('yoy') is not None else "N/A"
         
         context_data = (
             f"Active Filters: {context}\n"
             f"KPI Summary:\n"
             f"- Scope 1 Total: {k['scope1']:,.0f} tCO2e\n"
             f"- Scope 2 Total: {k['scope2']:,.0f} tCO2e\n"
-            f"- Combined Total: {k['combined']:,.0f} tCO2e\n\n"
-            f"Raw Database Table (CSV Format):\n{csv_data}\n"
+            f"- Combined Total: {k['combined']:,.0f} tCO2e\n"
+            f"- Prior Year Combined Total: {prev_str}\n"
+            f"- Year-over-Year (YoY) Change: {yoy_str}\n\n"
+            f"Raw Database Table (CSV Format across all available years):\n{csv_data}\n"
         )
         
-        system_prompt = f"You are a professional Sustainability Assistant. Answer the user's question based strictly on the provided dashboard data and Raw Database Table.\n\n{context_data}\n\nUser Question: {user_query}\nIf asked to calculate or compare specific plants/months, look at the Raw Database Table to do the math. Keep your answer brief, insightful, and formatted cleanly."
+        data_dictionary = (
+            "Data Dictionary Rules for the Raw Database Table:\n"
+            "- 'Total': This column represents the total activity data in raw units across all months, BEFORE multiplication with the emission factor.\n"
+            "- 'Total Emission (Annual)': This column represents the final total emissions across all months, AFTER multiplication with the emission factor (measured in tCO2e).\n"
+            "- 'Jan', 'Feb', 'Mar', etc.: These columns represent the emissions for that specific month that are already calculated by multiplication with the emission factor (measured in tCO2e).\n"
+        )
+        
+        system_prompt = f"You are a professional Sustainability Assistant. Answer the user's question based strictly on the provided dashboard data and Raw Database Table.\n\n{data_dictionary}\n{context_data}\n\nUser Question: {user_query}\nIf asked to calculate or compare specific plants, years, or months, look at the Raw Database Table and KPI Summary to do the math. Keep your answer brief, insightful, and formatted cleanly."
         try:
             return MODEL.generate_content(system_prompt).text
         except Exception as e:
@@ -817,10 +830,16 @@ def page_analytics(df: pd.DataFrame, filters: dict) -> None:
         return
 
     k = compute_kpis(df_current, df_prev)
+
+    # Filter for Chatbot across ALL reference years (2022 & 2023)
+    df_chat = df[df[COL_SOURCE].isin(plants)]
+    if scope_option != "Both":
+        df_chat = df_chat[df_chat[COL_SCOPE] == scope_option]
+
     main_col, chat_col = st.columns([7, 3], gap="large")
 
     with chat_col:
-        render_assistant_panel(f"{year} · {scope_option} · {len(plants)} plant(s)", k, df_current)
+        render_assistant_panel(f"{year} · {scope_option} · {len(plants)} plant(s)", k, df_chat)
 
     with main_col:
         drill_slot = st.empty()
